@@ -13,9 +13,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 import mplstereonet
 
-# import your helper functions here
-from your_module import read_and_validate_csv, calculate_planes, extract_strike_dip, plot_and_save
-
 st.title("Structural Trend Calculator")
 
 uploaded = st.file_uploader("Upload 3‑column CSV", type="csv")
