@@ -18,44 +18,54 @@ import mplstereonet
 # ─────────────────────────────────────────────────────────────────────────────
 
 def calculate_planes(points, separation_limit):
-    num_points = len(points)
+    # unchanged from optimized version earlier, except added inline notes
+    pts = np.asarray(points, dtype=float)
+    n = len(pts)
+    # build neighbor sets so we never test triples that already violate separation
+    neighbors = [set() for _ in range(n)]
+    for i in range(n):
+        for j in range(i+1, n):
+            if np.linalg.norm(pts[i]-pts[j]) <= separation_limit:
+                neighbors[i].add(j)
+                neighbors[j].add(i)
     planes = []
-    colinear_points = []
-    for i in range(num_points):
-        for j in range(i + 1, num_points):
-            for k in range(j + 1, num_points):
-                p1 = np.array(points[i])
-                p2 = np.array(points[j])
-                p3 = np.array(points[k])
-                # Check separation limit
-                distances = [np.linalg.norm(p1-p2),
-                             np.linalg.norm(p1-p3),
-                             np.linalg.norm(p2-p3)]
-                if any(dist > separation_limit for dist in distances):
-                    continue
-                # Calculate plane normal
-                v1 = p2 - p1
-                v2 = p3 - p1
+    colinear = []
+    # --- Iterate only over index triples that respect the separation limit ---
+    for i in range(n):
+        for j in neighbors[i]:
+            if j <= i: continue # ensure j > i
+            # Only k that are neighbors of both i and j can form a valid triple
+            common = neighbors[i].intersection(neighbors[j])
+            for k in common:
+                if k <= j: continue # ensure k > j
+                p1,p2,p3 = pts[i],pts[j],pts[k]
+                # Compute two edge vectors of the triangle
+                v1 = p2-p1
+                v2 = p3-p1
+                # Cross product = normal vector (not yet unit)
                 normal = np.cross(v1, v2)
-                # Normalize or mark colinear
                 norm = np.linalg.norm(normal)
                 if norm == 0:
-                    colinear_points.append((tuple(p1),tuple(p2),tuple(p3)))
-                    continue
-                normal = normal / norm
-                planes.append(tuple(normal))
-    return planes, colinear_points
+                    # Points are colinear or coincident
+                    colinear.append((tuple(p1),tuple(p2),tuple(p3)))
+                else:
+                    # Normalize to unit vector
+                    normal /= norm
+                    planes.append(tuple(normal))
+    return planes, colinear
 
 def extract_strike_dip(planes):
-    strikes = []
-    dips = []
-    for nx, ny, nz in planes:
-        # ensure upward‐facing
+    # plane normal → (strike, dip)
+    strikes, dips = [], []
+    for nx,ny,nz in planes:
+        # flip if down-facing
         if nz < 0:
-            nx, ny, nz = -nx, -ny, -nz
-        dip = np.degrees(np.arctan2(np.hypot(nx, ny), nz))
-        dipdir = (np.degrees(np.arctan2(nx, ny)) + 360) % 360
-        strike = (dipdir - 90) % 360
+            nx,ny,nz = -nx,-ny,-nz
+        # dip
+        dip = np.degrees(np.arctan2(np.hypot(nx,ny), nz))
+        # strike dir
+        dipdir = np.degrees(np.arctan2(nx, ny)) % 360.0
+        strike = (dipdir - 90.0) % 360.0
         strikes.append(strike)
         dips.append(dip)
     return np.array(strikes), np.array(dips)
@@ -67,7 +77,7 @@ def plot_and_save(strike, dip,
                   output_name,
                   return_fig=False):
     # Subsample poles for plotting
-    N = strike.size
+    N = len(strike)
     if N > plot_limit:
         idx = np.random.choice(N, plot_limit, replace=False)
         stks = strike[idx]; dips_ = dip[idx]
@@ -76,15 +86,15 @@ def plot_and_save(strike, dip,
 
     # Build figure
     fig, (ax1, ax2) = plt.subplots(
-        2, 1, figsize=(8, 10),
+        2, 1, figsize=(10, 10),
         subplot_kw={'projection':'stereonet'},
         #constrained_layout=True
     )
     # Top: poles + planes
     ax1.pole(stks, dips_, marker='.', ms=2, alpha=0.6)
-    ax1.plane(stks, dips_, linewidth=0.5, alpha=0.4)
+    #ax1.plane(stks, dips_, linewidth=0.5, alpha=0.4)
     ax1.grid(True)
-    ax1.set_title("Poles & Planes")
+    ax1.set_title("Poles")
 
     # Bottom: density contour
     kwargs = dict(
@@ -95,7 +105,7 @@ def plot_and_save(strike, dip,
     if method in ('exponential_kamb','linear_kamb','kamb'):
         kwargs['sigma'] = sigma
     dens = ax2.density_contourf(strike, dip, **kwargs)
-    ax2.pole(stks, dips_, 'wo', ms=1, alpha=0.3)
+    ax2.pole(stks, dips_, 'wo', ms=1, alpha=0.15)
     ax2.grid(True)
     ax2.set_title("Pole Density")
 
