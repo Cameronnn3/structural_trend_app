@@ -94,7 +94,7 @@ def plot_and_save(strike, dip,
     ax1.pole(stks, dips_, marker='.', ms=2, alpha=0.6)
     #ax1.plane(stks, dips_, linewidth=0.5, alpha=0.4)
     ax1.grid(True)
-    ax1.set_title("Poles")
+    ax1.set_title("Poles", pad=20)
 
     # Bottom: density contour
     kwargs = dict(
@@ -107,9 +107,9 @@ def plot_and_save(strike, dip,
     dens = ax2.density_contourf(strike, dip, **kwargs)
     ax2.pole(stks, dips_, 'wo', ms=1, alpha=0.15)
     ax2.grid(True)
-    ax2.set_title("Pole Density")
+    ax2.set_title("Pole Density", pad=20)
 
-    fig.colorbar(dens, ax=ax2, label='σ-departure')
+    fig.colorbar(dens, ax=ax2, label='σ-departure', pad=0.12)
 
     # Save if requested
     if output_name:
@@ -150,9 +150,11 @@ if uploaded is not None:
     pts = df.values
 
     # 3) Calculate planes
-    planes, colinear = calculate_planes(pts, sep_limit)
-    total_planes = len(planes)
-    st.write(f"Calculated **{total_planes}** planes; **{len(colinear)}** colinear triplets skipped.")
+    if st.button("Generate Stereonets"):
+      planes, colinear = calculate_planes(pts, sep_limit)
+      total_planes = len(planes)
+      st.write(f"Calculated **{total_planes}** planes; **{len(colinear)}** colinear triplets skipped.")
+
 
     # 4) Subset decision
     use_all = st.checkbox(
@@ -177,14 +179,16 @@ if uploaded is not None:
             strikes = strikes[idx]
             dips    = dips[idx]
         else:
-            lo, hi = st.slider(
-                "Select plane index range",
-                min_value=0, max_value=total_planes,
-                value=(0, total_planes),
-                step=1
+            lo = st.number_input(
+            "Start plane index",
+            min_value=0, max_value=total_planes,
+            value=0, step=1
             )
-            strikes = strikes[lo:hi]
-            dips    = dips[lo:hi]
+            hi = st.number_input(
+                "End plane index",
+                min_value=0, max_value=total_planes,
+                value=total_planes, step=1
+            )
 
     # 5) Density parameters
     method = st.selectbox("Choose density method",
