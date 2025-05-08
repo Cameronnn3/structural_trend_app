@@ -1,6 +1,4 @@
 voila
-os
-sys
 pandas
 numpy
 matplotlib
