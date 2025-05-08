@@ -13,116 +13,193 @@ import numpy as np
 import matplotlib.pyplot as plt
 import mplstereonet
 
-# 1) Function definitions go here
+# ─────────────────────────────────────────────────────────────────────────────
+# 1) Your original functions (unchanged, just lifted up above the UI code)
+# ─────────────────────────────────────────────────────────────────────────────
+
 def calculate_planes(points, separation_limit):
-    # unchanged from optimized version earlier, except added inline notes
-    pts = np.asarray(points, dtype=float)
-    n = len(pts)
-    # build neighbor sets so we never test triples that already violate separation
-    neighbors = [set() for _ in range(n)]
-    for i in range(n):
-        for j in range(i+1, n):
-            if np.linalg.norm(pts[i]-pts[j]) <= separation_limit:
-                neighbors[i].add(j)
-                neighbors[j].add(i)
+    num_points = len(points)
     planes = []
-    colinear = []
-    # --- Iterate only over index triples that respect the separation limit ---
-    for i in range(n):
-        for j in neighbors[i]:
-            if j <= i: continue # ensure j > i
-            # Only k that are neighbors of both i and j can form a valid triple
-            common = neighbors[i].intersection(neighbors[j])
-            for k in common:
-                if k <= j: continue # ensure k > j
-                p1,p2,p3 = pts[i],pts[j],pts[k]
-                # Compute two edge vectors of the triangle
-                v1 = p2-p1
-                v2 = p3-p1
-                # Cross product = normal vector (not yet unit)
+    colinear_points = []
+    for i in range(num_points):
+        for j in range(i + 1, num_points):
+            for k in range(j + 1, num_points):
+                p1 = np.array(points[i])
+                p2 = np.array(points[j])
+                p3 = np.array(points[k])
+                # Check separation limit
+                distances = [np.linalg.norm(p1-p2),
+                             np.linalg.norm(p1-p3),
+                             np.linalg.norm(p2-p3)]
+                if any(dist > separation_limit for dist in distances):
+                    continue
+                # Calculate plane normal
+                v1 = p2 - p1
+                v2 = p3 - p1
                 normal = np.cross(v1, v2)
+                # Normalize or mark colinear
                 norm = np.linalg.norm(normal)
                 if norm == 0:
-                    # Points are colinear or coincident
-                    colinear.append((tuple(p1),tuple(p2),tuple(p3)))
-                else:
-                    # Normalize to unit vector
-                    normal /= norm
-                    planes.append(tuple(normal))
-    return planes, colinear
+                    colinear_points.append((tuple(p1),tuple(p2),tuple(p3)))
+                    continue
+                normal = normal / norm
+                planes.append(tuple(normal))
+    return planes, colinear_points
 
 def extract_strike_dip(planes):
-    # plane normal → (strike, dip)
-    strikes, dips = [], []
-    for nx,ny,nz in planes:
-        # flip if down-facing
+    strikes = []
+    dips = []
+    for nx, ny, nz in planes:
+        # ensure upward‐facing
         if nz < 0:
-            nx,ny,nz = -nx,-ny,-nz
-        # dip
-        dip = np.degrees(np.arctan2(np.hypot(nx,ny), nz))
-        # strike dir
-        dipdir = np.degrees(np.arctan2(nx, ny)) % 360.0
-        strike = (dipdir - 90.0) % 360.0
+            nx, ny, nz = -nx, -ny, -nz
+        dip = np.degrees(np.arctan2(np.hypot(nx, ny), nz))
+        dipdir = (np.degrees(np.arctan2(nx, ny)) + 360) % 360
+        strike = (dipdir - 90) % 360
         strikes.append(strike)
         dips.append(dip)
     return np.array(strikes), np.array(dips)
 
-def plot_and_save(strikes, dips, plot_limit, method, sigma, out, return_fig=False):
-    # do not use input(); use method/sigma/out passed in
-    fig, (ax1,ax2) = plt.subplots(2,1, subplot_kw={'projection':'stereonet'})
-    # top: poles + planes
-    ax1.pole(strike_sub, dip_sub, '.', ms=2, alpha=0.8)
-    #ax1.plane(strike_sub, dip_sub, linewidth=0.5, alpha=0.4)
-    ax1.grid(True)
-    # bottom: density contour
-    dens = ax2.density_contourf(
-        strike, dip,
-        measurement='poles',
-        #gridsize=[36,18],        # unchanged default resolution
-        method=method,
-        sigma=sigma
+def plot_and_save(strike, dip,
+                  strike_sub, dip_sub,
+                  plot_limit,
+                  method, sigma,
+                  output_name,
+                  return_fig=False):
+    # Subsample poles for plotting
+    N = strike.size
+    if N > plot_limit:
+        idx = np.random.choice(N, plot_limit, replace=False)
+        stks = strike[idx]; dips_ = dip[idx]
+    else:
+        stks, dips_ = strike, dip
+
+    # Build figure
+    fig, (ax1, ax2) = plt.subplots(
+        2, 1, figsize=(8, 10),
+        subplot_kw={'projection':'stereonet'},
+        #constrained_layout=True
     )
-    if out:
-        plt.savefig(out, dpi=300)
-        print(f"→ Saved figure to {out}")
-    plt.show()
+    # Top: poles + planes
+    ax1.pole(stks, dips_, marker='.', ms=2, alpha=0.6)
+    ax1.plane(stks, dips_, linewidth=0.5, alpha=0.4)
+    ax1.grid(True)
+    ax1.set_title("Poles & Planes")
+
+    # Bottom: density contour
+    kwargs = dict(
+        measurement='poles',
+        #gridsize=[36, 18],
+        method=method
+    )
+    if method in ('exponential_kamb','linear_kamb','kamb'):
+        kwargs['sigma'] = sigma
+    dens = ax2.density_contourf(strike, dip, **kwargs)
+    ax2.pole(stks, dips_, 'wo', ms=1, alpha=0.3)
+    ax2.grid(True)
+    ax2.set_title("Pole Density")
+
+    fig.colorbar(dens, ax=ax2, label='σ-departure')
+
+    # Save if requested
+    if output_name:
+        fig.savefig(output_name, dpi=300)
+        st.success(f"Saved figure to: {output_name}")
+
     if return_fig:
         return fig
     else:
         plt.show()
 
-# 2) UI widgets
-st.title("Structural Trend Calculator")
-uploaded = st.file_uploader("Upload CSV", type="csv")
-header_skip = st.number_input("Skip header rows", 0, 100, 0)
-sep_limit    = st.number_input("Separation limit", 0.0, 1e6, 100.0)
-use_all      = st.checkbox("Use all planes?", True)
-plane_range  = st.slider("Plane range", 0, 1000, (0,100))
-plot_limit   = st.number_input("Max poles to plot", 1, 100000, 20000)
-method       = st.selectbox("Density method", [...])
-sigma        = st.number_input("Sigma", 0.1, 10.0, 1.0)
-output_name  = st.text_input("Output filename (png/jpg)", "")
+# ─────────────────────────────────────────────────────────────────────────────
+# 2) Streamlit UI
+# ─────────────────────────────────────────────────────────────────────────────
 
-# 3) Run button
-if st.button("Run Analysis"):
-    if uploaded is None:
-        st.error("Please upload a CSV.")
-    else:
+st.title("Structural Trend Calculator")
+st.write("Upload a CSV of x, y, z points and choose parameters below.")
+
+# 2A) File + header
+uploaded = st.file_uploader("CSV file (3 columns: x,y,z)", type="csv")
+header_skip = st.number_input("Header rows to skip", min_value=0, step=1, value=0)
+
+# 2B) Separation limit
+sep_limit = st.number_input("Enter separation limit", min_value=0.0, value=0.0, step=0.1)
+
+# Only proceed once we have a file
+if uploaded is not None:
+    try:
         df = pd.read_csv(uploaded, skiprows=header_skip)
-        if df.shape[1] != 3:
-            st.error("CSV must have exactly 3 columns (x,y,z).")
-            st.stop()
-        df.columns = ["x","y","z"]
-        pts = df.values
-        planes, colinear = calculate_planes(pts, sep_limit)
-        st.write(f"{len(planes)} planes; {len(colinear)} colinear skipped")
-        strikes, dips = extract_strike_dip(planes)
-        if not use_all:
-            lo,hi = plane_range
-            strikes, dips = strikes[lo:hi], dips[lo:hi]
-        fig = plot_and_save(strikes, dips,
-                            plot_limit, method, sigma, output_name,
-                            return_fig=True)
+    except Exception as e:
+        st.error(f"Error reading CSV: {e}")
+        st.stop()
+
+    if df.shape[1] != 3:
+        st.error("CSV must have exactly 3 columns (x, y, z).")
+        st.stop()
+    df.columns = ["x","y","z"]
+    pts = df.values
+
+    # 3) Calculate planes
+    planes, colinear = calculate_planes(pts, sep_limit)
+    total_planes = len(planes)
+    st.write(f"Calculated **{total_planes}** planes; **{len(colinear)}** colinear triplets skipped.")
+
+    # 4) Subset decision
+    use_all = st.checkbox(
+        "Use all of the calculated planes to create density plots? (More planes takes longer.)",
+        value=True
+    )
+
+    # extract orientations
+    strikes, dips = extract_strike_dip(planes)
+
+    if not use_all:
+        method_choice = st.radio(
+            "Use a random subset of the calculated planes? (If no, indicate index range.)",
+            ("Yes", "No")
+        )
+        if method_choice == "Yes":
+            subset_size = st.number_input(
+                "Enter subset size (≤ total planes)",
+                min_value=1, max_value=total_planes, value=min(1000, total_planes), step=1
+            )
+            idx = np.random.choice(total_planes, int(subset_size), replace=False)
+            strikes = strikes[idx]
+            dips    = dips[idx]
+        else:
+            lo, hi = st.slider(
+                "Select plane index range",
+                min_value=0, max_value=total_planes,
+                value=(0, total_planes),
+                step=1
+            )
+            strikes = strikes[lo:hi]
+            dips    = dips[lo:hi]
+
+    # 5) Density parameters
+    method = st.selectbox("Choose density method",
+                          ["exponential_kamb", "linear_kamb", "kamb", "schmidt"],
+                          index=0)
+    sigma = None
+    if method in ("exponential_kamb", "linear_kamb", "kamb"):
+        sigma = st.number_input("Enter sigma for Kamb methods", min_value=0.0, value=1.0, step=0.1)
+
+    # 6) Plot subset size + output filename
+    plot_limit = st.number_input(
+        "Number of poles to plot on stereonets:",
+        min_value=1, max_value=len(strikes), value=min(10000, len(strikes)), step=1
+    )
+    output_name = st.text_input("Output image filename (png/jpg)", value="")
+
+    # 7) Generate
+    if st.button("Generate Stereonets"):
+        fig = plot_and_save(
+            strikes, dips,
+            strikes, dips,
+            plot_limit,
+            method,
+            sigma,
+            output_name,
+            return_fig=True
+        )
         st.pyplot(fig)
-        if output_name:
-            st.success(f"Image saved to {output_name}")
