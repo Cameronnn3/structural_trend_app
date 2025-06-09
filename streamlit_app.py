@@ -50,7 +50,7 @@ def plot_stereonets(dens_strikes, dens_dips, plot_strikes, plot_dips, method, si
         2, 1, figsize=(10, 10),
         subplot_kw={'projection': 'stereonet'}
     )
-    fig.subplots_adjust(hspace=0.3)
+    fig.subplots_adjust(hspace=0.4)
     
     ax1.pole(plot_strikes, plot_dips, 'k.', ms=2)
     ax1.set_title('Individual poles', pad=30)
@@ -64,7 +64,7 @@ def plot_stereonets(dens_strikes, dens_dips, plot_strikes, plot_dips, method, si
     )
 
     ax2.pole(plot_strikes, plot_dips, 'wo', ms=1, alpha=0.15)
-    fig.colorbar(dens, ax=ax2, label='Pole density', pad=0.15)
+    fig.colorbar(dens, ax=ax2, label='Pole density', pad=0.13)
     ax2.grid(True)
     ax2.set_title('Density contour', pad=30)
 
