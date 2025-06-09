@@ -103,39 +103,50 @@ def plot_stereonets(strikes, dips, strikes_sub, dips_sub, method, sigma, max_plo
 st.title('Structural Trend Application')
 
 uploaded = st.file_uploader('Upload CSV file', type='csv')
-if uploaded:
+if uploaded is not None:
     skip_rows = st.number_input('Header rows to skip', min_value=0, step=1, value=0)
+    try:
+        df = pd.read_csv(uploaded, skiprows=int(skip_rows))
+    except Exception as e:
+        st.error(f"Error reading CSV: {e}")
+        st.stop()
+    if df.shape[1] < 3:
+        st.error("Data must have at least 3 columns.")
+        st.stop()
+    cols = list(df.columns)
+    x_col = st.selectbox('X-coordinate column', cols, index=0)
+    y_col = st.selectbox('Y-coordinate column', cols, index=1 if len(cols)>1 else 0)
+    z_col = st.selectbox('Z-coordinate column', cols, index=2 if len(cols)>2 else 0)
     separation_limit = st.number_input('Separation-distance limit', min_value=0.0, step=0.1, value=1.0)
     if st.button('Calculate planes'):
-        df = pd.read_csv(uploaded, skiprows=skip_rows)
-        if not set(['x','y','z']).issubset(df.columns):
-            st.error("CSV must contain 'x','y','z' columns.")
+        points = df[[x_col, y_col, z_col]].values
+        planes, colinear = calculate_planes(points, separation_limit)
+        st.session_state['planes'] = planes
+        st.session_state['colinear'] = colinear
+    if 'planes' in st.session_state:
+        planes = st.session_state['planes']
+        colinear = st.session_state['colinear']
+        st.write(f"Valid planes: {len(planes)}, invalid/colinear: {len(colinear)}")
+        strikes_all, dips_all = extract_strike_dip(planes)
+        use_all = st.radio('Use all planes?', ('Yes', 'No'))
+        if use_all == 'Yes':
+            strikes_sub, dips_sub = strikes_all, dips_all
         else:
-            planes, colinear = calculate_planes(df[['x','y','z']].values, separation_limit)
-            st.write(f"Valid planes: {len(planes)}, invalid/colinear: {len(colinear)}")
-            strikes_all, dips_all = extract_strike_dip(planes)
-            # Selection of subset
-            use_all = st.radio('Use all planes?', ('Yes', 'No'))
-            if use_all == 'Yes':
-                strikes_sub, dips_sub = strikes_all, dips_all
+            sample_method = st.selectbox('Subset method', ('Random subset', 'Slice'))
+            if sample_method == 'Random subset':
+                size = st.number_input('Subset size', min_value=1, max_value=len(strikes_all), value=min(200, len(strikes_all)))
+                idx = np.random.choice(len(strikes_all), size, replace=False)
+                strikes_sub, dips_sub = strikes_all[idx], dips_all[idx]
             else:
-                sample_method = st.selectbox('Subset method', ('Random subset', 'Slice'))
-                if sample_method == 'Random subset':
-                    size = st.number_input('Subset size', min_value=1, max_value=len(strikes_all), value=min(200, len(strikes_all)))
-                    idx = np.random.choice(len(strikes_all), size, replace=False)
-                    strikes_sub, dips_sub = strikes_all[idx], dips_all[idx]
-                else:
-                    start_idx = st.number_input('Slice start index', min_value=0, max_value=len(strikes_all)-1, value=0)
-                    end_idx = st.number_input('Slice end index', min_value=1, max_value=len(strikes_all), value=len(strikes_all))
-                    strikes_sub, dips_sub = strikes_all[start_idx:end_idx], dips_all[start_idx:end_idx]
-            # Density parameters
-            method = st.selectbox('Density method', ('exponential_kamb', 'linear_kamb', 'kamb', 'kernel', 'counts'))
+                start_idx = st.number_input('Slice start index', min_value=0, max_value=len(strikes_all)-1, value=0)
+                end_idx = st.number_input('Slice end index', min_value=1, max_value=len(strikes_all), value=len(strikes_all))
+                strikes_sub, dips_sub = strikes_all[start_idx:end_idx], dips_all[start_idx:end_idx]
+        method = st.selectbox('Density method', ('exponential_kamb', 'linear_kamb', 'kamb', 'kernel', 'counts'))
+        if method in ('exponential_kamb', 'linear_kamb', 'kamb'):
+            sigma = st.number_input('Sigma for Kamb', min_value=0.1, step=0.1, value=3.0)
+        else:
             sigma = None
-            if method in ('exponential_kamb', 'linear_kamb', 'kamb'):
-                sigma = st.number_input('Sigma for Kamb', min_value=0.1, step=0.1, value=3.0)
-            else:
-                sigma = 0.0
-            max_plot = st.number_input('Max # poles to plot', min_value=1, step=1, value=2000)
-            output_name = st.text_input('Output image filename (jpg/png)', '')
-            if st.button('Generate stereonets'):
-                plot_stereonets(strikes_all, dips_all, strikes_sub, dips_sub, method, sigma, max_plot, output_name)
+        max_plot = st.number_input('Max # poles to plot', min_value=1, step=1, value=2000)
+        output_name = st.text_input('Output image filename (jpg/png)', '')
+        if st.button('Generate stereonets'):
+            plot_stereonets(strikes_all, dips_all, strikes_sub, dips_sub, method, sigma, max_plot, output_name)
