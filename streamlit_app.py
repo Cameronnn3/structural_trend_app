@@ -130,7 +130,7 @@ if uploaded is not None:
                 end = st.number_input('Slice end index', min_value=1, max_value=len(strikes_all), value=len(strikes_all))
                 strikes_sub, dips_sub = strikes_all[start:end], dips_all[start:end]
 
-        method = st.selectbox('Density method', ['exponential_kamb', 'linear_kamb', 'kamb', 'kernel', 'counts'])
+        method = st.selectbox('Density method', ['exponential_kamb', 'linear_kamb', 'kamb', 'schmidt'])
         sigma = None
         if method in ['exponential_kamb', 'linear_kamb', 'kamb']:
             sigma = st.number_input('Sigma (Kamb)', min_value=0.1, step=0.1, value=3.0)
