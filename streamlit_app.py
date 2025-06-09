@@ -78,7 +78,7 @@ def plot_stereonets(dens_strikes, dens_dips, plot_strikes, plot_dips, method, si
     # Ensure scalars
     max_strike, max_dip = float(max_strike), float(max_dip)
     for ax in (ax1, ax2):
-        ax.pole(max_strike, max_dip, 'ro', ms=5)
+        ax.pole(max_strike, max_dip, 'ro', ms=3)
         ax.plane(max_strike, max_dip, 'r')
 
     return fig, max_strike, max_dip
