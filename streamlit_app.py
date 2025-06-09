@@ -47,7 +47,7 @@ def extract_strike_dip(planes):
 
 def plot_stereonets(dens_strikes, dens_dips, plot_strikes, plot_dips, method, sigma):
     fig, (ax1, ax2) = plt.subplots(
-        2, 1, figsize=(8, 12),
+        2, 1, figsize=10, 10),
         subplot_kw={'projection': 'stereonet'}
     )
     ax1.pole(plot_strikes, plot_dips, 'k.', ms=2)
@@ -60,9 +60,11 @@ def plot_stereonets(dens_strikes, dens_dips, plot_strikes, plot_dips, method, si
         method=method,
         sigma=sigma
     )
+
+    ax2.pole(plot_strikes, plot_dips, 'wo', ms=1, alpha=0.15)
     fig.colorbar(dens, ax=ax2, label='Pole density', pad=0.12)
-    ax2.set_title('Density contour')
     ax2.grid(True)
+    ax2.set_title('Density contour')
 
     dgx, dgy, dgz = mplstereonet.density_grid(
         dens_strikes, dens_dips,
