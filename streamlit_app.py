@@ -50,12 +50,10 @@ def plot_stereonets(dens_strikes, dens_dips, plot_strikes, plot_dips, method, si
         2, 1, figsize=(8, 12),
         subplot_kw={'projection': 'stereonet'}
     )
-    # Individual poles plot
     ax1.pole(plot_strikes, plot_dips, 'k.', ms=2)
     ax1.set_title('Individual poles')
     ax1.grid(True)
 
-    # Density contour
     dens = ax2.density_contourf(
         dens_strikes, dens_dips,
         measurement='poles',
@@ -66,7 +64,6 @@ def plot_stereonets(dens_strikes, dens_dips, plot_strikes, plot_dips, method, si
     ax2.set_title('Density contour')
     ax2.grid(True)
 
-    # Compute max-density pole
     dgx, dgy, dgz = mplstereonet.density_grid(
         dens_strikes, dens_dips,
         measurement='poles',
@@ -74,8 +71,10 @@ def plot_stereonets(dens_strikes, dens_dips, plot_strikes, plot_dips, method, si
         sigma=sigma
     )
     i_max, j_max = np.unravel_index(np.nanargmax(dgz), dgz.shape)
-    max_x, max_y = dgx[i_max, j_max], dgy[i_max, j_max]
+    max_x, max_y = float(dgx[i_max, j_max]), float(dgy[i_max, j_max])
     max_strike, max_dip = mplstereonet.geographic2pole(max_x, max_y)
+    # Ensure scalars
+    max_strike, max_dip = float(max_strike), float(max_dip)
     for ax in (ax1, ax2):
         ax.pole(max_strike, max_dip, 'ro', ms=5)
         ax.plane(max_strike, max_dip, 'r')
@@ -111,10 +110,10 @@ if uploaded is not None:
 
     if 'planes' in st.session_state:
         planes = st.session_state['planes']
-        st.write(f"Valid planes: {len(planes)}, colinear: {len(st.session_state['collinear'])}")
+        colinear_count = len(st.session_state['collinear'])
+        st.write(f"Valid planes: {len(planes)}, colinear: {colinear_count}")
         strikes_all, dips_all = extract_strike_dip(planes)
 
-        # Choose subset for density and plotting
         use_all = st.radio('Use all planes for density?', ['Yes', 'No'])
         if use_all == 'Yes':
             strikes_sub, dips_sub = strikes_all, dips_all
@@ -129,13 +128,11 @@ if uploaded is not None:
                 end = st.number_input('Slice end index', min_value=1, max_value=len(strikes_all), value=len(strikes_all))
                 strikes_sub, dips_sub = strikes_all[start:end], dips_all[start:end]
 
-        # Density parameters
         method = st.selectbox('Density method', ['exponential_kamb', 'linear_kamb', 'kamb', 'kernel', 'counts'])
         sigma = None
         if method in ['exponential_kamb', 'linear_kamb', 'kamb']:
             sigma = st.number_input('Sigma (Kamb)', min_value=0.1, step=0.1, value=3.0)
 
-        # Limit number of poles plotted
         max_plot = st.number_input('Max poles to plot', min_value=1, max_value=len(strikes_sub), value=len(strikes_sub))
         if max_plot < len(strikes_sub):
             idx_plot = np.random.choice(len(strikes_sub), max_plot, replace=False)
@@ -151,11 +148,10 @@ if uploaded is not None:
             st.success(f"Max-density pole: strike={max_strike:.1f}, dip={max_dip:.1f}")
             st.pyplot(fig)
 
-            # Download and save
             buf = io.BytesIO()
             fmt = 'png' if out_name.lower().endswith('.png') else 'jpg'
             fig.savefig(buf, format=fmt)
             buf.seek(0)
-            st.download_button('Download plot', data=buf, file_name=out_name, mime=f'image/{fmt}')
+            st.download_button('Download plot', data=buf, file_name=out_name, mime=f"image/{fmt}")
             fig.savefig(out_name, dpi=300)
             st.info(f"Also saved on server as '{out_name}'")
