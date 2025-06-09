@@ -64,7 +64,7 @@ def plot_stereonets(dens_strikes, dens_dips, plot_strikes, plot_dips, method, si
     )
 
     ax2.pole(plot_strikes, plot_dips, 'wo', ms=1, alpha=0.15)
-    fig.colorbar(dens, ax=ax2, label='Pole density', pad=0.14)
+    fig.colorbar(dens, ax=ax2, label='Pole density', pad=0.12)
     ax2.grid(True)
     #ax2.set_title('Density contour', pad=30)
 
