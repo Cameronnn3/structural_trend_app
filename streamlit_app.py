@@ -147,13 +147,17 @@ if uploaded is not None:
         if st.button('Generate stereonets'):
             with st.spinner('Generating stereonets...'):
                 fig, max_strike, max_dip = plot_stereonets(strikes_sub, dips_sub, plot_strikes, plot_dips, method, sigma)
+                st.session_state['fig']         = fig
+                st.session_state['max_strike']  = max_strike
+                st.session_state['max_dip']     = max_dip
+        
+        if 'fig' in st.session_state:
             st.success(f"Max-density pole: strike={max_strike:.1f}, dip={max_dip:.1f}")
-            st.pyplot(fig)
-
+            st.pyplot(st.session_state['fig'])
             buf = io.BytesIO()
             fmt = 'png' if out_name.lower().endswith('.png') else 'jpg'
-            fig.savefig(buf, format=fmt)
+            st.session_state['fig'].savefig(buf, format=fmt)
             buf.seek(0)
             st.download_button('Download plot', data=buf, file_name=out_name, mime=f"image/{fmt}")
-            fig.savefig(out_name, dpi=300)
+            st.session_state['fig'].savefig(out_name, dpi=300)
             st.info(f"Also saved on server as '{out_name}'")
