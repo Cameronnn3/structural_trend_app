@@ -45,19 +45,19 @@ def extract_strike_dip(planes):
     return np.array(strikes), np.array(dips)
 
 
-def plot_stereonets(strikes, dips, strikes_sub, dips_sub, method, sigma):
+def plot_stereonets(dens_strikes, dens_dips, plot_strikes, plot_dips, method, sigma):
     fig, (ax1, ax2) = plt.subplots(
         2, 1, figsize=(8, 12),
         subplot_kw={'projection': 'stereonet'}
     )
-    # Individual poles
-    ax1.pole(strikes_sub, dips_sub, 'k.', ms=2)
+    # Individual poles plot
+    ax1.pole(plot_strikes, plot_dips, 'k.', ms=2)
     ax1.set_title('Individual poles')
     ax1.grid(True)
 
-    # Density contour (using strikes/dips)
+    # Density contour
     dens = ax2.density_contourf(
-        strikes, dips,
+        dens_strikes, dens_dips,
         measurement='poles',
         method=method,
         sigma=sigma
@@ -68,7 +68,7 @@ def plot_stereonets(strikes, dips, strikes_sub, dips_sub, method, sigma):
 
     # Compute max-density pole
     dgx, dgy, dgz = mplstereonet.density_grid(
-        strikes, dips,
+        dens_strikes, dens_dips,
         measurement='poles',
         method=method,
         sigma=sigma
@@ -112,50 +112,50 @@ if uploaded is not None:
     if 'planes' in st.session_state:
         planes = st.session_state['planes']
         st.write(f"Valid planes: {len(planes)}, colinear: {len(st.session_state['collinear'])}")
-        strikes, dips = extract_strike_dip(planes)
+        strikes_all, dips_all = extract_strike_dip(planes)
 
-        use_all = st.radio('Use all planes?', ['Yes', 'No'])
+        # Choose subset for density and plotting
+        use_all = st.radio('Use all planes for density?', ['Yes', 'No'])
         if use_all == 'Yes':
-            strikes_sub, dips_sub = strikes, dips
+            strikes_sub, dips_sub = strikes_all, dips_all
         else:
             method_choice = st.selectbox('Subset method', ['Random subset', 'Slice'])
             if method_choice == 'Random subset':
-                size = st.number_input('Subset size', min_value=1, max_value=len(strikes), value=min(500, len(strikes)))
-                idx = np.random.choice(len(strikes), size, replace=False)
-                strikes_sub, dips_sub = strikes[idx], dips[idx]
+                size = st.number_input('Subset size', min_value=1, max_value=len(strikes_all), value=min(500, len(strikes_all)))
+                idx = np.random.choice(len(strikes_all), size, replace=False)
+                strikes_sub, dips_sub = strikes_all[idx], dips_all[idx]
             else:
-                start = st.number_input('Slice start', min_value=0, max_value=len(strikes)-1, value=0)
-                end = st.number_input('Slice end', min_value=1, max_value=len(strikes), value=len(strikes))
-                strikes_sub, dips_sub = strikes[start:end], dips[start:end]
+                start = st.number_input('Slice start index', min_value=0, max_value=len(strikes_all)-1, value=0)
+                end = st.number_input('Slice end index', min_value=1, max_value=len(strikes_all), value=len(strikes_all))
+                strikes_sub, dips_sub = strikes_all[start:end], dips_all[start:end]
 
+        # Density parameters
         method = st.selectbox('Density method', ['exponential_kamb', 'linear_kamb', 'kamb', 'kernel', 'counts'])
         sigma = None
         if method in ['exponential_kamb', 'linear_kamb', 'kamb']:
             sigma = st.number_input('Sigma (Kamb)', min_value=0.1, step=0.1, value=3.0)
 
-        max_plot = st.number_input('Max poles to include in density', min_value=1, value=len(strikes))
-        if max_plot < len(strikes):
-            idx2 = np.random.choice(len(strikes), max_plot, replace=False)
-            strikes_plot = strikes[idx2]
-            dips_plot = dips[idx2]
+        # Limit number of poles plotted
+        max_plot = st.number_input('Max poles to plot', min_value=1, max_value=len(strikes_sub), value=len(strikes_sub))
+        if max_plot < len(strikes_sub):
+            idx_plot = np.random.choice(len(strikes_sub), max_plot, replace=False)
+            plot_strikes, plot_dips = strikes_sub[idx_plot], dips_sub[idx_plot]
         else:
-            strikes_plot, dips_plot = strikes, dips
+            plot_strikes, plot_dips = strikes_sub, dips_sub
 
         out_name = st.text_input('Output filename (with extension .png/.jpg)', 'stereonet.png')
 
         if st.button('Generate stereonets'):
             with st.spinner('Generating stereonets...'):
-                fig, max_strike, max_dip = plot_stereonets(strikes_plot, dips_plot, strikes_sub, dips_sub, method, sigma)
+                fig, max_strike, max_dip = plot_stereonets(strikes_sub, dips_sub, plot_strikes, plot_dips, method, sigma)
             st.success(f"Max-density pole: strike={max_strike:.1f}, dip={max_dip:.1f}")
             st.pyplot(fig)
 
-            # Save to buffer and provide download
+            # Download and save
             buf = io.BytesIO()
             fmt = 'png' if out_name.lower().endswith('.png') else 'jpg'
             fig.savefig(buf, format=fmt)
             buf.seek(0)
             st.download_button('Download plot', data=buf, file_name=out_name, mime=f'image/{fmt}')
-
-            # Also save on server (cwd)
             fig.savefig(out_name, dpi=300)
             st.info(f"Also saved on server as '{out_name}'")
