@@ -1,3 +1,0 @@
-#!/usr/bin/env bash
-mkdir -p "${HOME}/.jupyter"
-cp ./voila_config.py "${HOME}/.jupyter/jupyter_notebook_config.py"
