@@ -47,7 +47,7 @@ def extract_strike_dip(planes):
 
 def plot_stereonets(dens_strikes, dens_dips, plot_strikes, plot_dips, method, sigma):
     fig, (ax1, ax2) = plt.subplots(
-        2, 1, figsize=10, 10),
+        2, 1, figsize=(10, 10),
         subplot_kw={'projection': 'stereonet'}
     )
     ax1.pole(plot_strikes, plot_dips, 'k.', ms=2)
