@@ -5,185 +5,70 @@ import matplotlib.pyplot as plt
 import mplstereonet
 import io
 from scipy.spatial import cKDTree
-import numba as nb
 
 # ----------------------------
 # Core functionality (same outputs)
 # ----------------------------
-
-def _build_adjacency_from_pairs(n, pairs):
-    """
-    pairs: (m,2) int array of undirected edges (i<j)
-    Returns CSR-like adjacency: offsets (n+1), neigh (2m)
-    """
-    deg = np.zeros(n, dtype=np.int64)
-    i = pairs[:, 0]; j = pairs[:, 1]
-    np.add.at(deg, i, 1)
-    np.add.at(deg, j, 1)
-
-    offsets = np.empty(n + 1, dtype=np.int64)
-    offsets[0] = 0
-    np.cumsum(deg, out=offsets[1:])
-
-    neigh = np.empty(offsets[-1], dtype=np.int32)
-    cur = offsets[:-1].copy()
-
-    # fill
-    for a, b in pairs:
-        neigh[cur[a]] = b; cur[a] += 1
-        neigh[cur[b]] = a; cur[b] += 1
-
-    # IMPORTANT: sort each neighbor list so we can do fast intersections
-    for v in range(n):
-        s = offsets[v]; e = offsets[v+1]
-        neigh[s:e].sort()
-
-    return offsets, neigh
-
-
-@nb.njit
-def _intersect_count(a, a0, a1, b, b0, b1, min_k):
-    # count intersection of sorted a[a0:a1] and b[b0:b1] with k > min_k
-    ia = a0
-    ib = b0
-    c = 0
-    while ia < a1 and ib < b1:
-        va = a[ia]; vb = b[ib]
-        if va == vb:
-            if va > min_k:
-                c += 1
-            ia += 1; ib += 1
-        elif va < vb:
-            ia += 1
-        else:
-            ib += 1
-    return c
-
-
-@nb.njit(parallel=True)
-def _count_planes(pts, offsets, neigh):
-    n = pts.shape[0]
-    total = 0
-    for i in nb.prange(n):
-        si = offsets[i]; ei = offsets[i+1]
-        for idx_j in range(si, ei):
-            j = neigh[idx_j]
-            if j <= i:
-                continue
-            sj = offsets[j]; ej = offsets[j+1]
-            # triangles i-j-k where k in N(i)∩N(j) and k>j
-            total += _intersect_count(neigh, si, ei, neigh, sj, ej, j)
-    return total
-
-
-@nb.njit(parallel=True)
-def _fill_planes(pts, offsets, neigh, out_normals, out_is_colinear):
-    n = pts.shape[0]
-    write_pos = np.zeros(n, dtype=np.int64)
-
-    # first pass: per-i counts to compute write offsets
-    counts = np.zeros(n, dtype=np.int64)
-    for i in nb.prange(n):
-        si = offsets[i]; ei = offsets[i+1]
-        c = 0
-        for idx_j in range(si, ei):
-            j = neigh[idx_j]
-            if j <= i:
-                continue
-            sj = offsets[j]; ej = offsets[j+1]
-            c += _intersect_count(neigh, si, ei, neigh, sj, ej, j)
-        counts[i] = c
-
-    # prefix sum counts -> write_pos
-    total = 0
-    for i in range(n):
-        write_pos[i] = total
-        total += counts[i]
-
-    # second pass: actually write normals
-    for i in nb.prange(n):
-        si = offsets[i]; ei = offsets[i+1]
-        w = write_pos[i]
-        for idx_j in range(si, ei):
-            j = neigh[idx_j]
-            if j <= i:
-                continue
-            sj = offsets[j]; ej = offsets[j+1]
-            ia = si
-            ib = sj
-            # intersect N(i) and N(j)
-            while ia < ei and ib < ej:
-                a = neigh[ia]; b = neigh[ib]
-                if a == b:
-                    k = a
-                    if k > j:
-                        v1x = pts[j,0] - pts[i,0]; v1y = pts[j,1] - pts[i,1]; v1z = pts[j,2] - pts[i,2]
-                        v2x = pts[k,0] - pts[i,0]; v2y = pts[k,1] - pts[i,1]; v2z = pts[k,2] - pts[i,2]
-                        nx = v1y*v2z - v1z*v2y
-                        ny = v1z*v2x - v1x*v2z
-                        nz = v1x*v2y - v1y*v2x
-                        norm = (nx*nx + ny*ny + nz*nz) ** 0.5
-                        if norm == 0.0:
-                            out_is_colinear[w] = True
-                            out_normals[w,0] = 0.0
-                            out_normals[w,1] = 0.0
-                            out_normals[w,2] = 0.0
-                        else:
-                            out_is_colinear[w] = False
-                            out_normals[w,0] = nx / norm
-                            out_normals[w,1] = ny / norm
-                            out_normals[w,2] = nz / norm
-                        w += 1
-                    ia += 1; ib += 1
-                elif a < b:
-                    ia += 1
-                else:
-                    ib += 1
-
-
 @st.cache_data(show_spinner=False)
-def calculate_planes_cached(points: np.ndarray, separation_limit: float):
+def calculate_planes(points, separation_limit):
     pts = np.asarray(points, dtype=np.float64)
     n = pts.shape[0]
     if n < 3:
-        return np.empty((0,3), dtype=np.float32), []
+        return np.empty((0, 3)), []
 
+    # --- fast neighbor search ---
     tree = cKDTree(pts)
-    # edges where distance <= separation_limit
     pairs = np.array(list(tree.query_pairs(r=float(separation_limit))), dtype=np.int32)
-    if pairs.size == 0:
-        return np.empty((0,3), dtype=np.float32), []
+    if len(pairs) == 0:
+        return np.empty((0, 3)), []
 
-    offsets, neigh = _build_adjacency_from_pairs(n, pairs)
+    # --- build sorted adjacency lists ---
+    neighbors = [[] for _ in range(n)]
+    for i, j in pairs:
+        neighbors[i].append(j)
+        neighbors[j].append(i)
 
-    # count triangles first so we can allocate exactly (no change in plane count)
-    total = _count_planes(pts, offsets, neigh)
+    for i in range(n):
+        neighbors[i].sort()
 
-    normals = np.empty((total, 3), dtype=np.float32)
-    is_col = np.empty(total, dtype=np.bool_)
-
-    _fill_planes(pts, offsets, neigh, normals, is_col)
-
-    # build the same "colinear list" type as you had (but beware: huge lists can be massive)
-    # If this gets too big, you can instead return just a count without changing plane normals.
+    planes = []
     colinear = []
-    # We only know which triangle indices are colinear here; rebuilding the original triplets
-    # would require also writing (i,j,k). If you truly need the actual point triplets, we can
-    # add arrays for i,j,k (still fast, but more memory).
-    # For now: preserve your "colinear count" behavior by storing placeholders:
-    # (If you need actual triplets, say so and I’ll give the exact i/j/k output version.)
-    colinear_count = int(is_col.sum())
-    if colinear_count:
-        colinear = [None] * colinear_count  # keeps len(colinear) identical to original intent
 
-    # IMPORTANT: planes returned include all normals; colinear triangles are not included as normals in your old code.
-    # In your old code, colinear triangles were excluded from planes list. So we must filter them out:
-    planes = normals[~is_col]
+    # --- triangle enumeration via sorted intersections ---
+    for i in range(n):
+        Ni = neighbors[i]
+        for j in Ni:
+            if j <= i:
+                continue
+            Nj = neighbors[j]
 
-    return planes, colinear
+            # intersect Ni and Nj with k > j
+            pi = pj = 0
+            while pi < len(Ni) and pj < len(Nj):
+                ki = Ni[pi]
+                kj = Nj[pj]
+                if ki == kj:
+                    k = ki
+                    if k > j:
+                        v1 = pts[j] - pts[i]
+                        v2 = pts[k] - pts[i]
+                        normal = np.cross(v1, v2)
+                        norm = np.linalg.norm(normal)
+                        if norm == 0:
+                            colinear.append((pts[i], pts[j], pts[k]))
+                        else:
+                            planes.append(normal / norm)
+                    pi += 1
+                    pj += 1
+                elif ki < kj:
+                    pi += 1
+                else:
+                    pj += 1
+
+    return np.asarray(planes), colinear
 
 
-@st.cache_data(show_spinner=False)
+
 def extract_strike_dip_cached(planes: np.ndarray):
     strikes, dips = [], []
     for nx, ny, nz in planes:
@@ -197,7 +82,6 @@ def extract_strike_dip_cached(planes: np.ndarray):
     return np.array(strikes), np.array(dips)
 
 
-@st.cache_data(show_spinner=False)
 def plot_stereonets_cached(dens_strikes, dens_dips, plot_strikes, plot_dips, method, sigma):
     """
     Cached figure generation so changing unrelated widgets doesn't
