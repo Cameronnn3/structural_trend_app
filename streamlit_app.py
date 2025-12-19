@@ -214,7 +214,7 @@ if method in ['exponential_kamb', 'linear_kamb', 'kamb']:
 max_plot = st.number_input('Max poles to plot', min_value=1, max_value=len(strikes_all), value=min(len(strikes_all), 2000))
 out_name = st.text_input('Output filename (with extension .png/.jpg)', 'stereonet.png')
 
-gen_submit = st.form_submit_button('Generate stereonets')
+gen_submit = st.button('Generate stereonets')
 
 if gen_submit:
     # choose density subset
