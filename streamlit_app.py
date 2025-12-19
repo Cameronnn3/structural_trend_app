@@ -77,17 +77,22 @@ def calculate_planes(points, separation_limit):
 
 
 
-def extract_strike_dip_cached(planes: np.ndarray):
-    strikes, dips = [], []
-    for nx, ny, nz in planes:
-        if nz < 0:
-            nx, ny, nz = -nx, -ny, -nz
-        dip = np.degrees(np.arctan2(np.hypot(nx, ny), nz))
-        dipdir = np.degrees(np.arctan2(nx, ny)) % 360.0
-        strike = (dipdir - 90.0) % 360.0
-        strikes.append(strike)
-        dips.append(dip)
-    return np.array(strikes), np.array(dips)
+def extract_strike_dip(planes):
+    p = np.asarray(planes, dtype=np.float64)
+    if p.size == 0:
+        return np.empty(0), np.empty(0)
+
+    # flip so nz >= 0
+    m = p[:, 2] < 0
+    p = p.copy()
+    p[m] *= -1
+
+    nx, ny, nz = p[:, 0], p[:, 1], p[:, 2]
+    dip = np.degrees(np.arctan2(np.hypot(nx, ny), nz))
+    dipdir = np.degrees(np.arctan2(nx, ny)) % 360.0
+    strike = (dipdir - 90.0) % 360.0
+    return strike, dip
+
 
 
 def plot_stereonets_cached(dens_strikes, dens_dips, plot_strikes, plot_dips, method, sigma):
@@ -168,8 +173,11 @@ if calc_submit:
     pts = df[[x_col, y_col, z_col]].to_numpy()
     with st.spinner("Calculating planes..."):
         planes, collinear = calculate_planes(pts, float(sep_lim))
-    st.session_state['planes'] = planes
+        strikes_all, dips_all = extract_strike_dip(planes)
+    st.session_state['planes'] = planes.astype(np.float32, copy=False)
     st.session_state['collinear'] = collinear
+    st.session_state['strikes_all'] = strikes_all
+    st.session_state['dips_all'] = dips_all
     # reset downstream outputs when planes change
     st.session_state.pop('fig', None)
     st.session_state.pop('max_strike', None)
@@ -184,7 +192,9 @@ colinear_count = len(st.session_state.get('collinear', []))
 st.write(f"Valid planes: {len(planes)}, colinear: {colinear_count}")
 
 # Strike/dip for *all planes* (cached)
-strikes_all, dips_all = extract_strike_dip_cached(planes)
+strikes_all = st.session_state['strikes_all']
+dips_all = st.session_state['dips_all']
+
 
 
 use_all = st.radio('Use all planes for density?', ['Yes', 'No'])
