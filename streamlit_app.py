@@ -159,7 +159,7 @@ with st.form("plane_calc_form", clear_on_submit=False):
 if calc_submit:
     pts = df[[x_col, y_col, z_col]].to_numpy()
     with st.spinner("Calculating planes..."):
-        planes, collinear = calculate_planes_cached(pts, float(sep_lim))
+        planes, collinear = calculate_planes(pts, float(sep_lim))
     st.session_state['planes'] = planes
     st.session_state['collinear'] = collinear
     # reset downstream outputs when planes change
