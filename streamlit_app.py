@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import mplstereonet
 import io
 from scipy.spatial import cKDTree
+import time
 
 # ----------------------------
 # Core functionality (same outputs)
@@ -170,6 +171,7 @@ with st.form("plane_calc_form", clear_on_submit=False):
     calc_submit = st.form_submit_button('Calculate planes')
 
 if calc_submit:
+    t0 = time.time()
     pts = df[[x_col, y_col, z_col]].to_numpy()
     with st.spinner("Calculating planes..."):
         planes, collinear = calculate_planes(pts, float(sep_lim))
@@ -182,6 +184,7 @@ if calc_submit:
     st.session_state.pop('fig', None)
     st.session_state.pop('max_strike', None)
     st.session_state.pop('max_dip', None)
+    st.write(f"Step took {time.time()-t0:.1f} s")
 
 if 'planes' not in st.session_state:
     st.info("Click **Calculate planes** to continue.")
@@ -235,6 +238,7 @@ out_name = st.text_input('Output filename (with extension .png/.jpg)', 'stereone
 gen_submit = st.button('Generate stereonets')
 
 if gen_submit:
+    t0 = time.time()
     # choose density subset
     if use_all == 'Yes':
         strikes_sub, dips_sub = strikes_all, dips_all
@@ -260,10 +264,17 @@ if gen_submit:
             strikes_sub, dips_sub, plot_strikes, plot_dips, method, sigma
         )
 
+    fmt = 'png' if out_name.lower().endswith('.png') else 'jpg'
+    buf = io.BytesIO()
+    fig.savefig(buf, format=fmt, dpi=150)  # dpi affects speed; 150 is usually plenty for web
+    buf.seek(0)
+    
     st.session_state['fig'] = fig
     st.session_state['max_strike'] = max_strike
     st.session_state['max_dip'] = max_dip
     st.session_state['out_name'] = out_name
+    st.session_state['img_bytes'] = buf.getvalue()
+    st.session_state['img_mime'] = f"image/{fmt}"
 
 # ---------- display/download ----------
 if 'fig' in st.session_state:
@@ -271,14 +282,15 @@ if 'fig' in st.session_state:
     max_dip = st.session_state['max_dip']
     out_name = st.session_state.get('out_name', 'stereonet.png')
 
-    st.success(f"Max-density pole: strike={max_strike:.1f}, dip={max_dip:.1f}")
+    st.success(f"Max-density pole: strike={st.session_state['max_strike']:.1f}, dip={st.session_state['max_dip']:.1f}")
     st.pyplot(st.session_state['fig'])
 
-    buf = io.BytesIO()
-    fmt = 'png' if out_name.lower().endswith('.png') else 'jpg'
-    st.session_state['fig'].savefig(buf, format=fmt)
-    buf.seek(0)
-    st.download_button('Download plot', data=buf, file_name=out_name, mime=f"image/{fmt}")
+    st.download_button(
+        'Download plot',
+        data=st.session_state['img_bytes'],
+        file_name=st.session_state.get('out_name','stereonet.png'),
+        mime=st.session_state['img_mime'],
+    )
 
     # NOTE: saving to server is usually pointless on Streamlit Cloud,
     # but keeping it because your original code did it.
