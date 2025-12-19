@@ -18,9 +18,17 @@ def calculate_planes(points, separation_limit):
 
     # --- fast neighbor search ---
     tree = cKDTree(pts)
-    pairs = np.array(list(tree.query_pairs(r=float(separation_limit))), dtype=np.int32)
-    if len(pairs) == 0:
+
+    # slight padding so we don't miss borderline candidates
+    r = float(separation_limit) * (1.0 + 1e-12)
+    pairs = np.array(list(tree.query_pairs(r=r)), dtype=np.int32)
+    
+    if pairs.size == 0:
         return np.empty((0, 3)), []
+    
+    # EXACT same criterion as your original code
+    d = np.linalg.norm(pts[pairs[:, 0]] - pts[pairs[:, 1]], axis=1)
+    pairs = pairs[d <= float(separation_limit)]
 
     # --- build sorted adjacency lists ---
     neighbors = [[] for _ in range(n)]
