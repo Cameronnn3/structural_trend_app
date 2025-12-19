@@ -96,7 +96,7 @@ def extract_strike_dip(planes):
 
 
 
-def plot_stereonets_cached(dens_strikes, dens_dips, plot_strikes, plot_dips, method, sigma):
+def plot_stereonets_cached(dens_strikes, dens_dips, plot_strikes, plot_dips, method, sigma, gridsize):
     """
     Cached figure generation so changing unrelated widgets doesn't
     re-run the heavy mplstereonet density work.
@@ -109,22 +109,30 @@ def plot_stereonets_cached(dens_strikes, dens_dips, plot_strikes, plot_dips, met
     ax1.pole(plot_strikes, plot_dips, 'k.', ms=2)
     ax1.grid(True)
 
-    dens = ax2.density_contourf(
-        dens_strikes, dens_dips,
-        measurement='poles',
-        method=method,
-        sigma=sigma
-    )
-    ax2.pole(plot_strikes, plot_dips, 'wo', ms=1, alpha=0.15)
-    fig.colorbar(dens, ax=ax2, label='Pole density', pad=0.125)
-    ax2.grid(True)
+    # dens = ax2.density_contourf(
+    #     dens_strikes, dens_dips,
+    #     measurement='poles',
+    #     method=method,
+    #     sigma=sigma
+    # )
+    # ax2.pole(plot_strikes, plot_dips, 'wo', ms=1, alpha=0.15)
+    # fig.colorbar(dens, ax=ax2, label='Pole density', pad=0.125)
+    # ax2.grid(True)
 
     dgx, dgy, dgz = mplstereonet.density_grid(
         dens_strikes, dens_dips,
         measurement='poles',
         method=method,
-        sigma=sigma
+        sigma=sigma,
+        gridsize=int(gridsize)
     )
+
+    dens = ax2.contourf(dgx, dgy, dgz)   # uses precomputed grid
+    fig.colorbar(dens, ax=ax2, label='Pole density', pad=0.125)
+    ax2.pole(plot_strikes, plot_dips, 'wo', ms=1, alpha=0.15)
+    ax2.grid(True)
+
+    
     i_max, j_max = np.unravel_index(np.nanargmax(dgz), dgz.shape)
     max_x, max_y = float(dgx[i_max, j_max]), float(dgy[i_max, j_max])
     max_strike, max_dip = mplstereonet.geographic2pole(max_x, max_y)
@@ -230,6 +238,7 @@ method = st.selectbox('Density method', ['exponential_kamb', 'linear_kamb', 'kam
 sigma = None
 if method in ['exponential_kamb', 'linear_kamb', 'kamb']:
     sigma = st.number_input('Sigma (Kamb)', min_value=0.1, step=0.1, value=3.0)
+gridsize = st.number_input('Gridsize', value=50) # need to add realistic min and max values.
 
 # plotting subset (for speed)
 max_plot = st.number_input('Max poles to plot', min_value=1, max_value=len(strikes_all), value=min(len(strikes_all), 2000))
@@ -261,7 +270,7 @@ if gen_submit:
 
     with st.spinner('Generating stereonets...'):
         fig, max_strike, max_dip = plot_stereonets_cached(
-            strikes_sub, dips_sub, plot_strikes, plot_dips, method, sigma
+            strikes_sub, dips_sub, plot_strikes, plot_dips, method, sigma, gridsize
         )
 
     fmt = 'png' if out_name.lower().endswith('.png') else 'jpg'
@@ -291,8 +300,3 @@ if 'fig' in st.session_state:
         file_name=st.session_state.get('out_name','stereonet.png'),
         mime=st.session_state['img_mime'],
     )
-
-    # NOTE: saving to server is usually pointless on Streamlit Cloud,
-    # but keeping it because your original code did it.
-    st.session_state['fig'].savefig(out_name, dpi=300)
-    st.info(f"Also saved on server as '{out_name}'")
