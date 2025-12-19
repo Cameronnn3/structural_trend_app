@@ -109,15 +109,17 @@ def plot_stereonets_cached(dens_strikes, dens_dips, plot_strikes, plot_dips, met
     ax1.pole(plot_strikes, plot_dips, 'k.', ms=2)
     ax1.grid(True)
 
-    # dens = ax2.density_contourf(
-    #     dens_strikes, dens_dips,
-    #     measurement='poles',
-    #     method=method,
-    #     sigma=sigma
-    # )
-    # ax2.pole(plot_strikes, plot_dips, 'wo', ms=1, alpha=0.15)
-    # fig.colorbar(dens, ax=ax2, label='Pole density', pad=0.125)
-    # ax2.grid(True)
+    dens = ax2.density_contourf(
+        dens_strikes, dens_dips,
+        measurement='poles',
+        method=method,
+        sigma=sigma,
+        gridsize=int(gridsize),
+    )
+    
+    ax2.pole(plot_strikes, plot_dips, 'wo', ms=1, alpha=0.15)
+    fig.colorbar(dens, ax=ax2, label='Pole density', pad=0.125)
+    ax2.grid(True)
 
     dgx, dgy, dgz = mplstereonet.density_grid(
         dens_strikes, dens_dips,
@@ -126,12 +128,6 @@ def plot_stereonets_cached(dens_strikes, dens_dips, plot_strikes, plot_dips, met
         sigma=sigma,
         gridsize=int(gridsize)
     )
-
-    dens = ax2.contourf(dgx, dgy, dgz)   # uses precomputed grid
-    fig.colorbar(dens, ax=ax2, label='Pole density', pad=0.125)
-    ax2.pole(plot_strikes, plot_dips, 'wo', ms=1, alpha=0.15)
-    ax2.grid(True)
-
     
     i_max, j_max = np.unravel_index(np.nanargmax(dgz), dgz.shape)
     max_x, max_y = float(dgx[i_max, j_max]), float(dgy[i_max, j_max])
