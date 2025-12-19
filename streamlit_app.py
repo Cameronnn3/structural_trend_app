@@ -1,162 +1,83 @@
-"""# Updated streamlit_app.py
-# - Adds a progress indicator for the plane calculation (real-time progress bar)
-# - Adds an optional voxel-grid downsampling (fast pre-filter) before plane extraction
-# - Uses a simple file-based cache (per input hash) so repeated UI interactions are instant
-# - Keeps high-resolution PNG download (300 dpi)
-#
-# Note: For best performance, install scipy (pip install scipy) to get cKDTree.
-#"""
 import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import mplstereonet
 import io
-import os
-import hashlib
-import threading
-import time
+from scipy.spatial import cKDTree
 
-# Try fast KD-tree implementation; fall back to naive if not available
-try:
-    from scipy.spatial import cKDTree as KDTree
-    _have_kdtree = True
-except Exception:
-    KDTree = None
-    _have_kdtree = False
+# ----------------------------
+# Core functionality (same outputs)
+# ----------------------------
 
-CACHE_DIR = ".plane_cache"
-os.makedirs(CACHE_DIR, exist_ok=True)
-
-
-def hash_inputs(points_bytes: bytes, shape: tuple, separation_limit: float, downsample_size: float):
-    m = hashlib.sha256()
-    m.update(points_bytes)
-    m.update(str(shape).encode())
-    m.update(str(separation_limit).encode())
-    m.update(str(downsample_size).encode())
-    return m.hexdigest()
-
-
-def cache_path_for_hash(h):
-    return os.path.join(CACHE_DIR, f"{h}.npz")
-
-
-def voxel_downsample(pts: np.ndarray, voxel_size: float):
+@st.cache_data(show_spinner=False)
+def calculate_planes_cached(points: np.ndarray, separation_limit: float):
     """
-    Simple voxel-grid downsampling: group points into cubes of side `voxel_size`
-    and keep one point per occupied voxel (the first encountered).
-    Returns the downsampled points and the number kept.
-    """
-    if voxel_size <= 0:
-        return pts
-    coords = np.floor(pts / float(voxel_size)).astype(np.int64)
-    # Use a dict to pick the first point in each voxel
-    seen = {}
-    indices = []
-    for i, key in enumerate(map(tuple, coords)):
-        if key not in seen:
-            seen[key] = i
-            indices.append(i)
-    return pts[indices]
+    Same logic as your original:
+    - neighbors defined by Euclidean distance <= separation_limit
+    - planes from triples where all three pairwise neighbor links exist
+    - normals normalized; colinear tracked if cross product norm == 0
 
-
-def _compute_planes_to_cache(pts: np.ndarray, separation_limit: float, cache_file: str, progress_dict: dict):
+    Faster neighbor search via KD-tree; does NOT change which pairs qualify.
     """
-    Compute planes and save compressed npz to cache_file.
-    progress_dict is a shared dict with keys 'total','current','done' (used only for progress UI).
-    """
-    pts = np.asarray(pts, dtype=np.float32)
+    pts = np.asarray(points, dtype=float)
     n = len(pts)
     if n < 3:
-        np.savez_compressed(cache_file, planes=np.empty((0, 3), dtype=np.float32), colinear=np.empty((0, 3), dtype=np.int32))
-        progress_dict['total'] = n
-        progress_dict['current'] = n
-        progress_dict['done'] = True
-        return
+        return np.empty((0, 3), dtype=float), []
 
-    if _have_kdtree:
-        tree = KDTree(pts)
-    else:
-        tree = None
+    # KD-tree radius neighbor query (same distance threshold, much faster than n^2 loops)
+    tree = cKDTree(pts)
+    # query_ball_point returns indices within radius for each point (includes itself)
+    neighbor_lists = tree.query_ball_point(pts, r=float(separation_limit))
 
-    planes_list = []
+    # Convert to sets and remove self
+    neighbors = []
+    for i, lst in enumerate(neighbor_lists):
+        s = set(lst)
+        s.discard(i)
+        neighbors.append(s)
+
+    planes = []
     colinear = []
-    progress_dict['total'] = n
-    progress_dict['current'] = 0
-    progress_dict['done'] = False
 
-    eps = 1e-8
-
+    # Keep the *same triple enumeration structure* as your original code
     for i in range(n):
-        # neighbors within separation_limit (including i)
-        if tree is not None:
-            neigh = tree.query_ball_point(pts[i], separation_limit)
-        else:
-            dists = np.linalg.norm(pts - pts[i], axis=1)
-            neigh = np.where(dists <= separation_limit)[0].tolist()
+        for j in neighbors[i]:
+            for k in neighbors[j]:
+                if k <= j or k not in neighbors[i]:
+                    continue
+                v1 = pts[j] - pts[i]
+                v2 = pts[k] - pts[i]
+                normal = np.cross(v1, v2)
+                norm = np.linalg.norm(normal)
+                if norm == 0:
+                    colinear.append((pts[i], pts[j], pts[k]))
+                else:
+                    planes.append(normal / norm)
 
-        # keep only neighbors with index > i to avoid duplicate combinations
-        neigh = [j for j in neigh if j > i]
-        m = len(neigh)
-        if m >= 2:
-            neigh_arr = np.array(neigh, dtype=np.int32)
-            idx_j, idx_k = np.triu_indices(m, k=1)
-            js = neigh_arr[idx_j]
-            ks = neigh_arr[idx_k]
-            v1 = pts[js] - pts[i]
-            v2 = pts[ks] - pts[i]
-            normals = np.cross(v1, v2)
-            norms = np.linalg.norm(normals, axis=1)
-            nonzero_mask = norms > eps
-
-            if np.any(~nonzero_mask):
-                for bad_j, bad_k in zip(js[~nonzero_mask], ks[~nonzero_mask]):
-                    colinear.append((int(i), int(bad_j), int(bad_k)))
-
-            if np.any(nonzero_mask):
-                normals_nonzero = normals[nonzero_mask] / norms[nonzero_mask][:, None]
-                planes_list.append(normals_nonzero.astype(np.float32))
-
-        progress_dict['current'] += 1
-
-    if len(planes_list) > 0:
-        planes = np.vstack(planes_list)
-    else:
-        planes = np.empty((0, 3), dtype=np.float32)
-
-    # Save to compressed file
-    np.savez_compressed(cache_file, planes=planes, colinear=np.array(colinear, dtype=np.int32))
-    progress_dict['done'] = True
+    return np.array(planes), colinear
 
 
-def load_cached_planes(cache_file: str):
-    data = np.load(cache_file)
-    planes = data['planes']
-    colinear = data['colinear']
-    return planes, colinear.tolist() if colinear.size else []
+@st.cache_data(show_spinner=False)
+def extract_strike_dip_cached(planes: np.ndarray):
+    strikes, dips = [], []
+    for nx, ny, nz in planes:
+        if nz < 0:
+            nx, ny, nz = -nx, -ny, -nz
+        dip = np.degrees(np.arctan2(np.hypot(nx, ny), nz))
+        dipdir = np.degrees(np.arctan2(nx, ny)) % 360.0
+        strike = (dipdir - 90.0) % 360.0
+        strikes.append(strike)
+        dips.append(dip)
+    return np.array(strikes), np.array(dips)
 
 
-def extract_strike_dip(planes):
-    if planes.size == 0:
-        return np.array([], dtype=np.float32), np.array([], dtype=np.float32)
-
-    nx = planes[:, 0].astype(np.float64)
-    ny = planes[:, 1].astype(np.float64)
-    nz = planes[:, 2].astype(np.float64)
-
-    flip_mask = nz < 0
-    nx[flip_mask] *= -1
-    ny[flip_mask] *= -1
-    nz[flip_mask] *= -1
-
-    dip = np.degrees(np.arctan2(np.hypot(nx, ny), nz))
-    dipdir = np.degrees(np.arctan2(nx, ny)) % 360.0
-    strike = (dipdir - 90.0) % 360.0
-    return strike.astype(np.float32), dip.astype(np.float32)
-
-
-def plot_stereonets(dens_strikes, dens_dips, plot_strikes, plot_dips, method, sigma):
+@st.cache_data(show_spinner=False)
+def plot_stereonets_cached(dens_strikes, dens_dips, plot_strikes, plot_dips, method, sigma):
+    """
+    Cached figure generation so changing unrelated widgets doesn't
+    re-run the heavy mplstereonet density work.
+    """
     fig, (ax1, ax2) = plt.subplots(
         2, 1, figsize=(10, 10),
         subplot_kw={'projection': 'stereonet'}
@@ -190,166 +111,150 @@ def plot_stereonets(dens_strikes, dens_dips, plot_strikes, plot_dips, method, si
         ax.pole(max_strike, max_dip, 'ro', ms=3)
         ax.plane(max_strike, max_dip, 'r')
 
-    # high-resolution PNG bytes for download & display
-    buf = io.BytesIO()
-    fig.savefig(buf, format='png', dpi=300, bbox_inches='tight')
-    buf.seek(0)
-    png_bytes = buf.getvalue()
-
-    return fig, max_strike, max_dip, png_bytes
+    return fig, max_strike, max_dip
 
 
-# --- Streamlit UI ---
+# ----------------------------
+# Streamlit UI
+# ----------------------------
+
 st.title('Structural Trend Application')
 
 uploaded = st.file_uploader('Upload CSV file', type='csv')
-if uploaded is not None:
-    skip = st.number_input('Header rows to skip', min_value=0, step=1, value=0)
-    try:
-        df = pd.read_csv(uploaded, skiprows=int(skip))
-    except Exception as e:
-        st.error(f"Error reading CSV: {e}")
-        st.stop()
+if uploaded is None:
+    st.stop()
 
-    if df.shape[1] < 3:
-        st.error("Need at least 3 columns of point data.")
-        st.stop()
+# Read CSV (cached by Streamlit automatically via uploaded file bytes changing)
+skip = st.number_input('Header rows to skip', min_value=0, step=1, value=0)
 
-    cols = df.columns.tolist()
+try:
+    df = pd.read_csv(uploaded, skiprows=int(skip))
+except Exception as e:
+    st.error(f"Error reading CSV: {e}")
+    st.stop()
+
+if df.shape[1] < 3:
+    st.error("Need at least 3 columns of point data.")
+    st.stop()
+
+cols = df.columns.tolist()
+
+# ---------- FORM 1: plane calculation ----------
+with st.form("plane_calc_form", clear_on_submit=False):
     x_col = st.selectbox('X column', cols, index=0)
     y_col = st.selectbox('Y column', cols, index=1 if len(cols) > 1 else 0)
     z_col = st.selectbox('Z column', cols, index=2 if len(cols) > 2 else 0)
     sep_lim = st.number_input('Separation-distance limit', min_value=0.0, step=0.1, value=1.0)
+    calc_submit = st.form_submit_button('Calculate planes')
 
-    # Optional voxel downsampling to speed up plane extraction
-    do_downsample = st.checkbox('Downsample points (voxel grid) before plane extraction', value=False)
-    downsample_size = 0.0
-    if do_downsample:
-        downsample_size = st.number_input('Voxel size for downsampling', min_value=0.001, step=0.001, value=0.5)
+if calc_submit:
+    pts = df[[x_col, y_col, z_col]].to_numpy()
+    with st.spinner("Calculating planes..."):
+        planes, collinear = calculate_planes_cached(pts, float(sep_lim))
+    st.session_state['planes'] = planes
+    st.session_state['collinear'] = collinear
+    # reset downstream outputs when planes change
+    st.session_state.pop('fig', None)
+    st.session_state.pop('max_strike', None)
+    st.session_state.pop('max_dip', None)
 
-    pts = df[[x_col, y_col, z_col]].values.astype(np.float32)
-    original_count = len(pts)
+if 'planes' not in st.session_state:
+    st.info("Click **Calculate planes** to continue.")
+    st.stop()
 
-    # Convert points to bytes for hashing
-    pts_bytes = pts.tobytes()
-    h = hash_inputs(pts_bytes, pts.shape, float(sep_lim), float(downsample_size))
-    cache_file = cache_path_for_hash(h)
+planes = st.session_state['planes']
+colinear_count = len(st.session_state.get('collinear', []))
+st.write(f"Valid planes: {len(planes)}, colinear: {colinear_count}")
 
-    st.markdown(f"Points: {original_count}")
+# Strike/dip for *all planes* (cached)
+strikes_all, dips_all = extract_strike_dip_cached(planes)
 
-    # If cached file exists, show small info and don't re-run heavy computation
-    if os.path.exists(cache_file):
-        cached = True
-        planes, colinear = load_cached_planes(cache_file)
-        st.info(f"Using cached computation for this input (planes: {len(planes)}, colinear: {len(colinear)})")
-        st.session_state['planes_hash'] = h
+# ---------- FORM 2: stereonet / density settings ----------
+with st.form("stereonet_form", clear_on_submit=False):
+    use_all = st.radio('Use all planes for density?', ['Yes', 'No'])
+
+    # make randomness stable across reruns unless user changes it
+    if 'subset_seed' not in st.session_state:
+        st.session_state['subset_seed'] = 0
+
+    if use_all == 'Yes':
+        method_choice = None
+        size = None
+        start = None
+        end = None
+        seed = None
     else:
-        cached = False
-
-    if st.button('Calculate planes'):
-        if do_downsample and downsample_size > 0:
-            pts_ds = voxel_downsample(pts, downsample_size)
-            st.write(f"Downsampled: {len(pts_ds)} points (from {original_count})")
+        method_choice = st.selectbox('Subset method', ['Random subset', 'Slice'])
+        if method_choice == 'Random subset':
+            size = st.number_input(
+                'Subset size', min_value=1, max_value=len(strikes_all),
+                value=min(500, len(strikes_all))
+            )
+            seed = st.number_input('Random seed', min_value=0, step=1, value=int(st.session_state['subset_seed']))
         else:
-            pts_ds = pts
+            start = st.number_input('Slice start index', min_value=0, max_value=len(strikes_all)-1, value=0)
+            end = st.number_input('Slice end index', min_value=1, max_value=len(strikes_all), value=len(strikes_all))
+            seed = None
+            size = None
 
-        # If cache already exists for these exact inputs, load and skip compute
-        if os.path.exists(cache_file):
-            planes, colinear = load_cached_planes(cache_file)
-            st.success(f"Planes loaded from cache: {len(planes)}, colinear: {len(colinear)}")
-            st.session_state['planes_hash'] = h
-        else:
-            # Run compute in a background thread and display progress
-            progress = {'total': 0, 'current': 0, 'done': False}
-            thread = threading.Thread(target=_compute_planes_to_cache, args=(pts_ds, float(sep_lim), cache_file, progress))
-            thread.start()
+    method = st.selectbox('Density method', ['exponential_kamb', 'linear_kamb', 'kamb', 'schmidt'])
+    sigma = None
+    if method in ['exponential_kamb', 'linear_kamb', 'kamb']:
+        sigma = st.number_input('Sigma (Kamb)', min_value=0.1, step=0.1, value=3.0)
 
-            progress_bar = st.progress(0.0)
-            status_text = st.empty()
-            last_update = 0.0
-            # Poll progress until done
-            while not progress.get('done', False):
-                total = progress.get('total', len(pts_ds) if pts_ds is not None else 1)
-                current = progress.get('current', 0)
-                # Avoid division by zero
-                frac = float(current) / float(total) if total > 0 else 0.0
-                # Only update UI at ~10Hz to avoid excessive reruns
-                now = time.time()
-                if now - last_update > 0.08:
-                    progress_bar.progress(min(max(frac, 0.0), 1.0))
-                    status_text.text(f"Processing point {current}/{total} ({frac*100:.1f}%)")
-                    last_update = now
-                time.sleep(0.05)
-            # Ensure thread finished
-            thread.join()
-            progress_bar.progress(1.0)
-            status_text.text("Done computing planes.")
-            # load from saved cache
-            planes, colinear = load_cached_planes(cache_file)
-            st.success(f"Planes computed: {len(planes)}, colinear: {len(colinear)}")
-            st.session_state['planes_hash'] = h
+    # plotting subset (for speed)
+    max_plot = st.number_input('Max poles to plot', min_value=1, max_value=len(strikes_all), value=min(len(strikes_all), 2000))
+    out_name = st.text_input('Output filename (with extension .png/.jpg)', 'stereonet.png')
 
-    # If planes were computed (or loaded), continue UI
-    if 'planes_hash' in st.session_state and st.session_state.get('planes_hash') == h:
-        planes, colinear = load_cached_planes(cache_file)
-        st.write(f"Valid planes: {len(planes)}, colinear: {len(colinear)}")
+    gen_submit = st.form_submit_button('Generate stereonets')
 
-        strikes_all, dips_all = extract_strike_dip(planes)
-
-        use_all = st.radio('Use all planes for density?', ['Yes', 'No'], index=0)
-        if use_all == 'Yes':
-            strikes_sub, dips_sub = strikes_all, dips_all
-        else:
-            method_choice = st.selectbox('Subset method', ['Random subset', 'Slice'])
-            if method_choice == 'Random subset':
-                size = st.number_input('Subset size', min_value=1, max_value=max(1, len(strikes_all)), value=min(500, len(strikes_all)))
-                idx = np.random.choice(len(strikes_all), int(size), replace=False)
-                strikes_sub, dips_sub = strikes_all[idx], dips_all[idx]
-            else:
-                start = st.number_input('Slice start index', min_value=0, max_value=max(0, len(strikes_all) - 1), value=0)
-                end = st.number_input('Slice end index', min_value=1, max_value=max(1, len(strikes_all)), value=len(strikes_all))
-                strikes_sub, dips_sub = strikes_all[int(start):int(end)], dips_all[int(start):int(end)]
-
-        method = st.selectbox('Density method', ['exponential_kamb', 'linear_kamb', 'kamb', 'schmidt'])
-        sigma = None
-        if method in ['exponential_kamb', 'linear_kamb', 'kamb']:
-            sigma = st.number_input('Sigma (Kamb)', min_value=0.1, step=0.1, value=3.0)
-
-        max_plot = st.number_input('Max poles to plot', min_value=1, max_value=max(1, len(strikes_sub)), value=len(strikes_sub))
-        if max_plot < len(strikes_sub):
-            idx_plot = np.random.choice(len(strikes_sub), int(max_plot), replace=False)
-            plot_strikes, plot_dips = strikes_sub[idx_plot], dips_sub[idx_plot]
-        else:
-            plot_strikes, plot_dips = strikes_sub, dips_sub
-
-        out_name = st.text_input('Output filename (with extension .png/.jpg)', 'stereonet.png')
-
-        if st.button('Generate stereonets'):
-            with st.spinner('Generating stereonets...'):
-                fig, max_strike, max_dip, png_bytes = plot_stereonets(strikes_sub, dips_sub, plot_strikes, plot_dips, method, sigma)
-                st.session_state['fig_png_bytes'] = png_bytes
-                st.session_state['max_strike'] = max_strike
-                st.session_state['max_dip'] = max_dip
-                st.session_state['last_out_name'] = out_name
-                # save file server-side if possible
-                try:
-                    fmt = 'png' if out_name.lower().endswith('.png') else 'jpg'
-                    with open(out_name, 'wb') as f:
-                        f.write(png_bytes)
-                    st.info(f"Also saved on server as '{out_name}'")
-                except Exception:
-                    pass
-
-        if 'fig_png_bytes' in st.session_state:
-            max_strike = st.session_state.get('max_strike', 0.0)
-            max_dip = st.session_state.get('max_dip', 0.0)
-            st.success(f"Max-density pole: strike={max_strike:.1f}, dip={max_dip:.1f}")
-
-            st.image(st.session_state['fig_png_bytes'], use_column_width=True)
-
-            out_name = st.session_state.get('last_out_name', 'stereonet.png')
-            mime = 'image/png' if out_name.lower().endswith('.png') else 'image/jpeg'
-            st.download_button('Download plot', data=st.session_state['fig_png_bytes'], file_name=out_name, mime=mime)
-
+if gen_submit:
+    # choose density subset
+    if use_all == 'Yes':
+        strikes_sub, dips_sub = strikes_all, dips_all
     else:
-        st.info("No planes computed yet for this dataset & separation limit. Click 'Calculate planes' to start.")
+        if method_choice == 'Random subset':
+            st.session_state['subset_seed'] = int(seed)
+            rng = np.random.default_rng(int(seed))
+            idx = rng.choice(len(strikes_all), int(size), replace=False)
+            strikes_sub, dips_sub = strikes_all[idx], dips_all[idx]
+        else:
+            strikes_sub, dips_sub = strikes_all[int(start):int(end)], dips_all[int(start):int(end)]
+
+    # choose poles to plot (separate from density inputs, same as your intent)
+    if max_plot < len(strikes_sub):
+        rng_plot = np.random.default_rng(0)  # stable plotting selection
+        idx_plot = rng_plot.choice(len(strikes_sub), int(max_plot), replace=False)
+        plot_strikes, plot_dips = strikes_sub[idx_plot], dips_sub[idx_plot]
+    else:
+        plot_strikes, plot_dips = strikes_sub, dips_sub
+
+    with st.spinner('Generating stereonets...'):
+        fig, max_strike, max_dip = plot_stereonets_cached(
+            strikes_sub, dips_sub, plot_strikes, plot_dips, method, sigma
+        )
+
+    st.session_state['fig'] = fig
+    st.session_state['max_strike'] = max_strike
+    st.session_state['max_dip'] = max_dip
+    st.session_state['out_name'] = out_name
+
+# ---------- display/download ----------
+if 'fig' in st.session_state:
+    max_strike = st.session_state['max_strike']
+    max_dip = st.session_state['max_dip']
+    out_name = st.session_state.get('out_name', 'stereonet.png')
+
+    st.success(f"Max-density pole: strike={max_strike:.1f}, dip={max_dip:.1f}")
+    st.pyplot(st.session_state['fig'])
+
+    buf = io.BytesIO()
+    fmt = 'png' if out_name.lower().endswith('.png') else 'jpg'
+    st.session_state['fig'].savefig(buf, format=fmt)
+    buf.seek(0)
+    st.download_button('Download plot', data=buf, file_name=out_name, mime=f"image/{fmt}")
+
+    # NOTE: saving to server is usually pointless on Streamlit Cloud,
+    # but keeping it because your original code did it.
+    st.session_state['fig'].savefig(out_name, dpi=300)
+    st.info(f"Also saved on server as '{out_name}'")
