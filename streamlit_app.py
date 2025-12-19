@@ -238,7 +238,7 @@ method = st.selectbox('Density method', ['exponential_kamb', 'linear_kamb', 'kam
 sigma = None
 if method in ['exponential_kamb', 'linear_kamb', 'kamb']:
     sigma = st.number_input('Sigma (Kamb)', min_value=0.1, step=0.1, value=3.0)
-gridsize = st.number_input('Gridsize', value=50) # need to add realistic min and max values.
+gridsize = st.number_input('Gridsize', value=100) # need to add realistic min and max values.
 
 # plotting subset (for speed)
 max_plot = st.number_input('Max poles to plot', min_value=1, max_value=len(strikes_all), value=min(len(strikes_all), 2000))
